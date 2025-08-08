@@ -1,0 +1,340 @@
+#!/usr/bin/env bash
+
+set -e
+
+USE_TAB=false
+USE_FLOATING=false
+USE_PANE=false
+NAME=""
+PROGRAM=""
+POS=""
+
+show_help() {
+    cat <<'EOF'
+zqantara (Zellij REPL Bridge)
+Named after the Arabic "qantara" meaning bridge - like how bridges connect distant places,
+this script bridges the gap between your Helix editor and REPL environments in Zellij.
+
+This script provides REPL interaction between Helix editor and Zellij by routing
+selected content to floating windows or tabs.
+
+It accepts content from stdin and sends it to designated Zellij tabs or floating
+windows using bracketed paste mode.
+
+Requirements:
+    - Zellij must be running with the session active
+    - Target REPL programs should support bracketed paste mode
+
+The script supports three main modes:
+1. Tab mode: Routes content to named tabs, creating them if they don't exist
+2. Floating mode: Routes content to floating windows by position or creates new ones
+3. Pane mode: Routes content to panes in specified positions, creating them if needed
+
+Usage:
+    # Send to existing tab or create new one:
+    echo 'print(42)' | ./zqantara --tab --name python --program 'ipython --simple-prompt'
+
+    # Send to current floating window:
+    echo 'ls -la' | ./zqantara --floating --pos current
+
+    # Send to floating window below current:
+    echo 'ls -la' | ./zqantara --floating --pos down
+
+    # Create new floating window:
+    ./zqantara --floating --program 'python3'
+
+    # Send to pane in the upper left position:
+    echo 'print(42)' | ./zqantara --pane --pos "up left"
+
+    # Create new pane with program (right direction):
+    ./zqantara --pane --pos right --program 'python3'
+
+    # Create new stacked pane:
+    ./zqantara --pane --pos stacked --program 'python3'
+
+Options:
+    --tab                       Use tab mode.
+    --floating                  Use floating window mode.
+    --pane                      Use pane mode.
+    --name <name>               Tab name (required for --tab mode).
+    --pos <position>            Position specification:
+                                For --pane mode:
+                                - With --program: 'right', 'down', or 'stacked'
+                                - Without --program: space-separated directions like 'up left' or 'down right right'
+                                For --floating mode (without --program):
+                                - 'current': use current floating window without switching focus
+                                - 'up'/'down': switch focus up/down, supports repetition like 'down down'
+    --program <command>         Program to launch (e.g., 'ipython --simple-prompt').
+    --help                      Show this help message and exit.
+
+Note: --tab, --floating, and --pane are mutually exclusive.
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+    --tab)
+        USE_TAB=true
+        shift
+        ;;
+    --floating)
+        USE_FLOATING=true
+        shift
+        ;;
+    --pane)
+        USE_PANE=true
+        shift
+        ;;
+    --name)
+        NAME="$2"
+        shift 2
+        ;;
+    --program)
+        PROGRAM="$2"
+        shift 2
+        ;;
+    --pos)
+        POS="$2"
+        shift 2
+        ;;
+    --help)
+        show_help
+        exit 0
+        ;;
+    *)
+        echo "Unknown option: $1" >&2
+        exit 1
+        ;;
+    esac
+done
+
+validate_args() {
+    # Count active modes
+    local mode_count=0
+
+    if [[ "$USE_TAB" == true ]]; then
+        mode_count=$((mode_count + 1))
+    elif [[ "$USE_FLOATING" == true ]]; then
+        mode_count=$((mode_count + 1))
+    elif [[ "$USE_PANE" == true ]]; then
+        mode_count=$((mode_count + 1))
+    fi
+
+    # Check that only one mode is used
+    if [[ $mode_count -gt 1 ]]; then
+        echo "Error: --tab, --floating, and --pane are mutually exclusive" >&2
+        exit 1
+    fi
+
+    # Check that at least one mode is specified
+    if [[ $mode_count -eq 0 ]]; then
+        echo "Error: One of --tab, --floating, or --pane must be specified" >&2
+        exit 1
+    fi
+
+    # Validate tab mode requirements
+    if [[ "$USE_TAB" == true && -z "$NAME" ]]; then
+        echo "Error: --name is required when using --tab" >&2
+        exit 1
+    fi
+
+    # Validate that --name is only used with --tab
+    if [[ ("$USE_FLOATING" == true || "$USE_PANE" == true) && -n "$NAME" ]]; then
+        echo "Error: --name can only be used with --tab" >&2
+        exit 1
+    fi
+
+    # Validate floating mode requirements
+    if [[ "$USE_FLOATING" == true ]]; then
+        if [[ -z "$PROGRAM" && -z "$POS" ]]; then
+            echo "Error: For floating windows, either --program or --pos is required" >&2
+            exit 1
+        fi
+
+        # When creating new floating window with --program, --pos must not be specified
+        if [[ -n "$PROGRAM" && -n "$POS" ]]; then
+            echo "Error: When creating new floating window with --program, --pos must not be specified" >&2
+            exit 1
+        fi
+
+        # When using --pos without --program, validate position values for floating mode
+        if [[ -z "$PROGRAM" && -n "$POS" ]]; then
+            # Check that POS only contains valid directions for floating mode
+            local invalid_word=""
+            for word in $POS; do
+                case "$word" in
+                up | down | current) ;; # Valid directions for floating mode
+                left | right)
+                    echo "Error: --pos does not support 'left' and 'right' directions in --floating mode" >&2
+                    exit 1
+                    ;;
+                *)
+                    invalid_word="$word"
+                    break
+                    ;;
+                esac
+            done
+
+            if [[ -n "$invalid_word" ]]; then
+                echo "Error: Invalid direction '$invalid_word' in --pos '$POS' for floating mode. Valid directions: up, down, current" >&2
+                exit 1
+            fi
+        fi
+    fi
+
+    # Validate pane mode requirements
+    if [[ "$USE_PANE" == true ]]; then
+        if [[ -z "$POS" ]]; then
+            echo "Error: --pos is required when using --pane" >&2
+            exit 1
+        fi
+
+        # When creating new pane with --program, validate position values
+        if [[ -n "$PROGRAM" ]]; then
+            case "$POS" in
+            right | down | stacked) ;; # Valid for new pane creation
+            *)
+                echo "Error: When creating new pane with --program, --pos can only be 'right', 'down', or 'stacked'" >&2
+                exit 1
+                ;;
+            esac
+        else
+            # When switching focus to existing pane, validate that POS contains only valid direction words
+            local invalid_word=""
+            for word in $POS; do
+                case "$word" in
+                left | right | up | down) ;; # Valid direction words
+                *)
+                    invalid_word="$word"
+                    break
+                    ;;
+                esac
+            done
+
+            if [[ -n "$invalid_word" ]]; then
+                echo "Error: Invalid direction '$invalid_word' in --pos '$POS'. Valid directions: left, right, up, down" >&2
+                exit 1
+            fi
+        fi
+    fi
+
+    # Validate that --pos is only used with --pane or --floating
+    if [[ "$USE_TAB" == true && -n "$POS" ]]; then
+        echo "Error: --pos can only be used with --pane or --floating" >&2
+        exit 1
+    fi
+}
+
+send_bracketed_paste() {
+    local content="$1"
+
+    zellij action write 27 91 50 48 48 126
+    zellij action write-chars "$content"
+    zellij action write 13 27 91 50 48 49 126 13
+}
+
+handle_tab_mode() {
+    local existing_tabs
+    existing_tabs=$(zellij action query-tab-names)
+
+    if echo "$existing_tabs" | grep -q "^$NAME$"; then
+        zellij action go-to-tab-name "$NAME"
+
+        if [[ -t 0 ]]; then
+            return 0
+        fi
+
+        local stdin_content
+        stdin_content=$(cat)
+        if [[ -n "$stdin_content" ]]; then
+            send_bracketed_paste "$stdin_content"
+        fi
+    else
+        if [[ -n "$PROGRAM" ]]; then
+            zellij action new-tab --name "$NAME"
+            zellij action go-to-tab-name "$NAME"
+            zellij action write-chars "$PROGRAM"
+            zellij action write 13
+        else
+            echo "Error: Tab '$NAME' does not exist and no --program specified" >&2
+            exit 1
+        fi
+    fi
+}
+
+handle_floating_mode() {
+    if [[ -n "$PROGRAM" ]]; then
+        zellij action new-pane --floating --cwd "$(pwd)" --close-on-exit -- $PROGRAM
+        return 0
+    fi
+
+    if [[ -n "$POS" ]]; then
+        zellij action toggle-floating-panes
+
+        # Handle focus switching based on --pos directions
+        for direction in $POS; do
+            case "$direction" in
+            current)
+                # Do nothing - stay at current position
+                ;;
+            up | down)
+                zellij action move-focus "$direction"
+                ;;
+            esac
+        done
+
+        if [[ ! -t 0 ]]; then
+            local stdin_content
+            stdin_content=$(cat)
+            if [[ -n "$stdin_content" ]]; then
+                send_bracketed_paste "$stdin_content"
+            fi
+        fi
+    fi
+}
+
+handle_pane_mode() {
+    if [[ -n "$PROGRAM" ]]; then
+        # Create new pane with program
+        case "$POS" in
+        right | down)
+            zellij action new-pane --direction "$POS" --cwd "$(pwd)" --close-on-exit -- $PROGRAM
+            ;;
+        stacked)
+            zellij action new-pane --stacked --cwd "$(pwd)" --close-on-exit -- $PROGRAM
+            ;;
+        esac
+        return 0
+    fi
+
+    # Switch to existing pane and send code
+    # Move focus according to the specified directions
+    for direction in $POS; do
+        zellij action move-focus "$direction"
+    done
+
+    # Send stdin content if available
+    if [[ ! -t 0 ]]; then
+        local stdin_content
+        stdin_content=$(cat)
+        if [[ -n "$stdin_content" ]]; then
+            send_bracketed_paste "$stdin_content"
+        fi
+    fi
+}
+
+validate_args
+
+# Check if zellij is running and we're inside a session
+if [[ -z "$ZELLIJ_SESSION_NAME" ]]; then
+    echo "Error: Not running inside a zellij session. Please start zellij first." >&2
+    exit 1
+fi
+
+if [[ "$USE_TAB" == true ]]; then
+    handle_tab_mode
+elif [[ "$USE_FLOATING" == true ]]; then
+    handle_floating_mode
+elif [[ "$USE_PANE" == true ]]; then
+    handle_pane_mode
+fi

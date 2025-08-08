@@ -1,0 +1,636 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+# Function to display help information
+show_help() {
+    cat <<'EOF'
+haico (Helix AI COmpletion)
+This script provides AI-based code completion for Helix editor using various AI providers (OpenAI, Claude, Gemini).
+
+It accepts file content from stdin or a file and prepares a formatted string for an AI model.
+
+Requirements:
+    - API key environment variable must be set based on provider:
+      * Gemini: GEMINI_API_KEY
+      * OpenAI: OPENAI_API_KEY (optionally set OPENAI_BASE_URL for custom endpoints)
+      * Claude: ANTHROPIC_API_KEY
+      * Codestral: CODESTRAL_API_KEY (optionally set CODESTRAL_BASE_URL for custom endpoints)
+    - jq command must be available for JSON processing
+
+Local AI Setup:
+    - For Ollama: Use --provider openai-fim, set OPENAI_BASE_URL=http://localhost:11434/v1
+      Recommended model: qwen2.5-coder:3b
+    - For llama.cpp: Use --provider openai-fim, set OPENAI_BASE_URL=http://localhost:8012/v1
+      Recommended model: qwen2.5-coder:3b
+    - For DeepSeek: Use --provider openai-fim, set OPENAI_BASE_URL=https://api.deepseek.com/beta
+
+Note: The --provider openai-fim uses the legacy completion API (rather than the
+modern Chat Completions API) and is strongly recommended for use with custom
+endpoints (Ollama, llama.cpp, DeepSeek) rather than OpenAI's default models.
+
+The --prepare flag exists because Helix cannot pass both the buffer content AND the current
+cursor position (line/column) in a single call. This requires a two-step workflow:
+1. First call: Use --prepare to store the buffer content verbatim to a temporary file
+2. Second call: Read the stored file and format it with the cursor position for AI completion
+
+The --wait flag is needed because Helix shell commands (pipe-to and run-shell-command) are
+asynchronous. In a two-step workflow, the second step might execute before the first step
+has finished writing the required data file. Adding a wait ensures proper sequencing.
+
+Usage:
+    # Read from stdin:
+    cat file.txt | ./haico [options]
+
+    # Read from cache file:
+    ./haico --file ~/.cache/haico/buffer_content.txt [options]
+
+    # Prepare mode (store stdin to file):
+    cat file.txt | ./haico --prepare --file /path/to/buffer.txt
+
+Options:
+    --cursor-line <line>            Cursor line number (1-based). Defaults to the last line.
+    --cursor-column <col>           Cursor column number (1-based). Defaults to the last column.
+    --system-prompt <prompt>        The system prompt for AI completion. Defaults to standard completion prompt.
+    --language <lang>               The programming language of the content.
+    --buffer-name <name>            The filename of the content.
+    --file <path>                   Read buffer content from file instead of stdin.
+    --prepare                       Store stdin content verbatim to --file (requires --file).
+    --wait <seconds>                Wait for specified seconds before execution. Defaults to 0.1.
+                                    Set to 0 to disable the waiting period.
+    --provider <provider>           AI provider to use: openai, claude, gemini, openai-fim, or codestral. Defaults to gemini.
+    --model <model>                 AI model to use. Defaults vary by provider:
+                                    gemini: gemini-2.0-flash
+                                    openai: gpt-4.1-nano
+                                    claude: claude-3-5-haiku-20241022
+                                    openai-fim: gpt-3.5-turbo-instruct
+                                    codestral: codestral-latest
+    --max-tokens <tokens>           Maximum output tokens. Defaults to 256.
+    --thinking-tokens <tokens>      Thinking tokens for reasoning. Defaults to 0. Generally recommended to keep at 0.
+    --stop <sequences>              Stop sequences as JSON array (e.g., '["\n", "END"]'). Defaults to none.
+                                    Note: Be careful with shell escaping rules.
+    --help                          Show this help message and exit.
+EOF
+}
+
+# --- Argument Parsing ---
+cursor_line=""
+cursor_column=""
+system_prompt="Complete the code, comment, or prose based on the provided context.
+Insert the completion at the \`<cursorPosition/>\` marker.
+Return only the generated text, without markdown code fences, and respect the original indentation.
+
+Examples:
+
+Input:
+<language>python</language>
+
+def fibonacci(n):
+    if n <= 1:
+        return n
+    return <cursorPosition/>
+
+Output:
+fibonacci(n-1) + fibonacci(n-2)
+
+Input:
+<language>javascript</language>
+
+const users = [
+    { name: 'Alice', age: 30 },
+    { name: 'Bob', age: 25 }
+];
+
+const names = users.map(<cursorPosition/>
+
+Output:
+user => user.name);
+
+Input:
+<language>rust</language>
+
+fn main() {
+    let mut vec = Vec::new();
+    vec.push(1);
+    vec.push(2);
+
+    for item in <cursorPosition/>
+
+Output:
+&vec {
+        println!(\"{}\", item);
+    }
+
+Important: Do not repeat code that appears before the cursor position. Only
+provide the completion text that should be inserted at the cursor location."
+language=""
+buffer_name=""
+input_file=""
+prepare_mode=false
+wait_seconds="0.1"
+provider="gemini"
+model=""
+max_tokens="256"
+thinking_tokens="0"
+stop_sequences=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+    --cursor-line)
+        cursor_line="$2"
+        shift 2
+        ;;
+    --cursor-column)
+        cursor_column="$2"
+        shift 2
+        ;;
+    --system-prompt)
+        system_prompt="$2"
+        shift 2
+        ;;
+    --language)
+        language="$2"
+        shift 2
+        ;;
+    --buffer-name)
+        buffer_name="$2"
+        shift 2
+        ;;
+    --file)
+        input_file="$2"
+        shift 2
+        ;;
+    --prepare)
+        prepare_mode=true
+        shift
+        ;;
+    --wait)
+        wait_seconds="$2"
+        shift 2
+        ;;
+    --provider)
+        provider="$2"
+        shift 2
+        ;;
+    --model)
+        model="$2"
+        shift 2
+        ;;
+    --max-tokens)
+        max_tokens="$2"
+        shift 2
+        ;;
+    --thinking-tokens)
+        thinking_tokens="$2"
+        shift 2
+        ;;
+    --stop)
+        stop_sequences="$2"
+        shift 2
+        ;;
+    --help)
+        show_help
+        exit 0
+        ;;
+    *)
+        echo "Unknown option: $1" >&2
+        exit 1
+        ;;
+    esac
+done
+
+# --- Set default model based on provider if not specified ---
+if [[ -z "$model" ]]; then
+    case "$provider" in
+    "gemini")
+        model="gemini-2.0-flash"
+        ;;
+    "openai")
+        model="gpt-4.1-nano"
+        ;;
+    "claude")
+        model="claude-3-5-haiku-20241022"
+        ;;
+    "openai-fim")
+        model="gpt-3.5-turbo-instruct"
+        ;;
+    "codestral")
+        model="codestral-latest"
+        ;;
+    esac
+fi
+
+if [[ "$prepare_mode" == true && -z "$input_file" ]]; then
+    echo "Error: --prepare requires --file to be specified." >&2
+    exit 1
+fi
+
+# --- Handle wait parameter ---
+if [[ -n "$wait_seconds" && "$wait_seconds" != "0" ]]; then
+    if [[ ! "$wait_seconds" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+        echo "Error: --wait must be a positive number." >&2
+        exit 1
+    fi
+    sleep "$wait_seconds"
+fi
+
+# --- Handle prepare mode ---
+if [[ "$prepare_mode" == true ]]; then
+    # In prepare mode, store stdin content verbatim to the specified file
+    mkdir -p "$(dirname "$input_file")"
+    cat >"$input_file"
+    exit 0
+fi
+
+# --- Read content from stdin or file ---
+if [[ -n "$input_file" ]]; then
+    if [[ ! -f "$input_file" ]]; then
+        echo "Error: File '$input_file' does not exist." >&2
+        exit 1
+    fi
+    content=$(cat "$input_file")
+else
+    content=$(cat)
+fi
+
+# --- Set default cursor position if not provided ---
+if [[ -z "$cursor_line" ]]; then
+    if [[ -z "$content" ]]; then
+        cursor_line=1
+    else
+        # Count lines; awk is reliable for this.
+        cursor_line=$(printf "%s" "$content" | awk 'END{print NR}')
+    fi
+fi
+
+if [[ -z "$cursor_column" ]]; then
+    if [[ -z "$content" ]]; then
+        cursor_column=1
+    else
+        # Get the line content for the cursor line
+        line_content=$(printf "%s" "$content" | sed -n "${cursor_line}p")
+        # Column is 1-based, so length + 1 is the position after the line
+        cursor_column=$(($(printf "%s" "$line_content" | wc -m) + 1))
+    fi
+fi
+
+# --- Split content at cursor position ---
+# Awk is used to split the file content into two parts based on the cursor.
+# HACK: Bash command substitution strips trailing newlines. When cursor is at
+# column 1, we need to preserve the newline before cursor, so we use a special
+# marker and remove it later with ${%} expansion syntax.
+
+newline_marker="羣"
+
+cursor_before_content=$(printf "%s" "$content" |
+    awk -v line="$cursor_line" -v col="$cursor_column" -v newline_marker="$newline_marker" '
+BEGIN { ORS = "" }
+NR < line { print $0; print "\n" }
+NR == line { print substr($0, 1, col - 1) }
+NR == line && col == 1 { print newline_marker }
+')
+
+cursor_after_content=$(printf "%s" "$content" | awk -v line="$cursor_line" -v col="$cursor_column" '
+BEGIN { ORS = "" }
+NR == line { print substr($0, col) }
+NR > line { print "\n"; print $0 }
+')
+
+# --- Prepare the formatted output ---
+formatted_content=""
+if [[ -n "$language" ]]; then
+    formatted_content+="<language>${language}</language>\n"
+fi
+if [[ -n "$buffer_name" ]]; then
+    formatted_content+="<filename>${buffer_name}</filename>\n"
+fi
+
+if [[ -n "$formatted_content" ]]; then
+    # Add a blank line separator if we have metadata.
+    formatted_content+="\n"
+fi
+
+formatted_content+="${cursor_before_content%"$newline_marker"}<cursorPosition/>${cursor_after_content}"
+
+# --- Create cache directory if it doesn't exist ---
+cache_dir="$HOME/.cache/haico"
+mkdir -p "$cache_dir"
+
+# --- Clean up old cache files ---
+[ -f "$cache_dir/text.xml" ] && rm "$cache_dir/text.xml"
+
+# --- Output results ---
+printf "%s" "$formatted_content" >"$cache_dir/text.xml"
+
+# --- Clean up input file if it was provided and we're not in prepare mode ---
+if [[ -n "$input_file" && "$prepare_mode" != true ]]; then
+    rm -f "$input_file"
+fi
+
+# --- Provider Functions ---
+gemini_request() {
+    # Check if GEMINI_API_KEY is set
+    if [[ -z "${GEMINI_API_KEY:-}" ]]; then
+        echo "Error: GEMINI_API_KEY environment variable is not set." >&2
+        exit 1
+    fi
+
+    # Prepare JSON payload for Gemini API
+    local json_payload
+    json_payload=$(jq -n \
+        --arg system_prompt "$system_prompt" \
+        --arg user_content "$formatted_content" \
+        --argjson max_tokens "$max_tokens" \
+        --argjson thinking_tokens "$thinking_tokens" \
+        --arg stop_sequences "$stop_sequences" \
+        '{
+            "contents": [
+                {
+                    "parts": [
+                        {
+                            "text": $user_content
+                        }
+                    ]
+                }
+            ],
+            "systemInstruction": {
+                "parts": [
+                    {
+                        "text": $system_prompt
+                    }
+                ]
+            },
+            "generationConfig": (
+                {
+                    "maxOutputTokens": $max_tokens,
+                    "thinkingConfig": {
+                        "thinkingBudget": $thinking_tokens
+                    }
+                } + (
+                    if $stop_sequences != "" then
+                        {"stopSequences": ($stop_sequences | fromjson)}
+                    else
+                        {}
+                    end
+                )
+            )
+        }')
+
+    # Make API request to Gemini
+    local response
+    response=$(curl -s -X POST \
+        "https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent" \
+        -H "x-goog-api-key: $GEMINI_API_KEY" \
+        -H "Content-Type: application/json" \
+        -d "$json_payload")
+
+    # Check if curl failed
+    if [[ $? -ne 0 ]]; then
+        echo "Error: Failed to make API request to Gemini." >&2
+        exit 1
+    fi
+
+    # Extract and return the generated text
+    local extracted_text
+    extracted_text=$(echo "$response" | jq -r '.candidates[0].content.parts[0].text // empty')
+    if [[ -z "$extracted_text" && -n "$response" ]]; then
+        echo "$response" >&2
+        exit 1
+    fi
+    printf "%s" "$extracted_text"
+}
+
+openai_request() {
+    # Check if OPENAI_API_KEY is set
+    if [[ -z "${OPENAI_API_KEY:-}" ]]; then
+        echo "Error: OPENAI_API_KEY environment variable is not set." >&2
+        exit 1
+    fi
+
+    # Set OpenAI base URL, defaulting to official API if not set
+    local openai_base_url
+    openai_base_url="${OPENAI_BASE_URL:-https://api.openai.com/v1}"
+
+    # Prepare JSON payload for OpenAI API
+    local json_payload
+    json_payload=$(jq -n \
+        --arg system_prompt "$system_prompt" \
+        --arg user_content "$formatted_content" \
+        --arg model "$model" \
+        --argjson max_tokens "$max_tokens" \
+        --arg stop_sequences "$stop_sequences" \
+        '{
+            "model": $model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": $system_prompt
+                },
+                {
+                    "role": "user",
+                    "content": $user_content
+                }
+            ],
+            "max_tokens": $max_tokens
+        } + (
+            if $stop_sequences != "" then
+                {"stop": ($stop_sequences | fromjson)}
+            else
+                {}
+            end
+        )')
+
+    # Make API request to OpenAI
+    local response
+    response=$(curl -s -X POST \
+        "${openai_base_url}/chat/completions" \
+        -H "Authorization: Bearer $OPENAI_API_KEY" \
+        -H "Content-Type: application/json" \
+        -d "$json_payload")
+
+    # Check if curl failed
+    if [[ $? -ne 0 ]]; then
+        echo "Error: Failed to make API request to OpenAI." >&2
+        exit 1
+    fi
+
+    # Extract and return the generated text
+    local extracted_text
+    extracted_text=$(echo "$response" | jq -r '.choices[0].message.content // empty')
+    if [[ -z "$extracted_text" && -n "$response" ]]; then
+        echo "$response" >&2
+        exit 1
+    fi
+    printf "%s" "$extracted_text"
+}
+
+claude_request() {
+    # Check if ANTHROPIC_API_KEY is set
+    if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
+        echo "Error: ANTHROPIC_API_KEY environment variable is not set." >&2
+        exit 1
+    fi
+
+    # Prepare JSON payload for Claude API
+    local json_payload
+    json_payload=$(jq -n \
+        --arg system_prompt "$system_prompt" \
+        --arg user_content "$formatted_content" \
+        --arg model "$model" \
+        --argjson max_tokens "$max_tokens" \
+        --arg stop_sequences "$stop_sequences" \
+        '{
+            "model": $model,
+            "max_tokens": $max_tokens,
+            "system": $system_prompt,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": $user_content
+                }
+            ]
+        } + (
+            if $stop_sequences != "" then
+                {"stop_sequences": ($stop_sequences | fromjson)}
+            else
+                {}
+            end
+        )')
+
+    # Make API request to Claude
+    local response
+    response=$(curl -s -X POST \
+        "https://api.anthropic.com/v1/messages" \
+        -H "x-api-key: $ANTHROPIC_API_KEY" \
+        -H "Content-Type: application/json" \
+        -H "anthropic-version: 2023-06-01" \
+        -d "$json_payload")
+
+    # Check if curl failed
+    if [[ $? -ne 0 ]]; then
+        echo "Error: Failed to make API request to Claude." >&2
+        exit 1
+    fi
+
+    # Extract and return the generated text
+    local extracted_text
+    extracted_text=$(echo "$response" | jq -r '.content[0].text // empty')
+    if [[ -z "$extracted_text" && -n "$response" ]]; then
+        echo "$response" >&2
+        exit 1
+    fi
+    printf "%s" "$extracted_text"
+}
+
+# Shared function for FIM-style requests (openai-fim and codestral)
+fim_request() {
+    local provider_name="$1"
+    local endpoint_path="$2"
+    local response_path="$3"
+    local api_key="$4"
+    local base_url="$5"
+
+    # Check if API key is set
+    if [[ -z "$api_key" ]]; then
+        echo "Error: API key for $provider_name is not set." >&2
+        exit 1
+    fi
+
+    # Use existing cursor split content, removing newline marker from before content
+    local prompt_part="${cursor_before_content%"$newline_marker"}"
+    local suffix_part="$cursor_after_content"
+
+    # Prepare JSON payload for FIM API
+    local json_payload
+    json_payload=$(jq -n \
+        --arg prompt "$prompt_part" \
+        --arg suffix "$suffix_part" \
+        --arg model "$model" \
+        --argjson max_tokens "$max_tokens" \
+        --arg stop_sequences "$stop_sequences" \
+        '{
+            "model": $model,
+            "prompt": $prompt,
+            "suffix": $suffix,
+            "max_tokens": $max_tokens
+        } + (
+            if $stop_sequences != "" then
+                {"stop": ($stop_sequences | fromjson)}
+            else
+                {}
+            end
+        )')
+
+    # Make API request
+    local response
+    response=$(curl -s -X POST \
+        "${base_url}${endpoint_path}" \
+        -H "Authorization: Bearer $api_key" \
+        -H "Content-Type: application/json" \
+        -d "$json_payload")
+
+    # Check if curl failed
+    if [[ $? -ne 0 ]]; then
+        echo "Error: Failed to make API request to $provider_name." >&2
+        exit 1
+    fi
+
+    # Extract and return the generated text using the specified response path
+    local extracted_text
+    extracted_text=$(echo "$response" | jq -r "$response_path // empty")
+    if [[ -z "$extracted_text" && -n "$response" ]]; then
+        echo "$response" >&2
+        exit 1
+    fi
+    printf "%s" "$extracted_text"
+}
+
+openai_fim_request() {
+    if [[ -z "${OPENAI_API_KEY:-}" ]]; then
+        echo "Error: OPENAI_API_KEY environment variable is not set." >&2
+        exit 1
+    fi
+    local openai_base_url="${OPENAI_BASE_URL:-https://api.openai.com/v1}"
+    fim_request "OpenAI FIM" "/completions" ".choices[0].text" "$OPENAI_API_KEY" "$openai_base_url"
+}
+
+codestral_request() {
+    if [[ -z "${CODESTRAL_API_KEY:-}" ]]; then
+        echo "Error: CODESTRAL_API_KEY environment variable is not set." >&2
+        exit 1
+    fi
+    local codestral_base_url="${CODESTRAL_BASE_URL:-https://codestral.mistral.ai/v1}"
+    fim_request "Codestral" "/fim/completions" ".choices[0].message.content" "$CODESTRAL_API_KEY" "$codestral_base_url"
+}
+
+# --- Make API request based on provider ---
+case "$provider" in
+"gemini")
+    generated_text=$(gemini_request)
+    ;;
+"openai")
+    generated_text=$(openai_request)
+    ;;
+"claude")
+    generated_text=$(claude_request)
+    ;;
+"openai-fim")
+    generated_text=$(openai_fim_request)
+    ;;
+"codestral")
+    generated_text=$(codestral_request)
+    ;;
+*)
+    echo "Error: Unsupported provider '$provider'. Supported providers: openai, claude, gemini, openai-fim, codestral." >&2
+    exit 1
+    ;;
+esac
+
+# Check if we got a valid response
+if [[ -z "$generated_text" ]]; then
+    echo "Error: No valid response from $provider API." >&2
+    exit 1
+fi
+
+# Output the generated text with trimmed whitespace
+echo -e "$generated_text" | sed '1s/^[[:space:]]*//' | sed '$s/[[:space:]]*$//'
