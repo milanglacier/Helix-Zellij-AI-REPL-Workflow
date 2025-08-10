@@ -193,9 +193,9 @@ c = ":sh zqantara --pane --pos stacked --program aichat"
 [keys.normal.space.space]
 # Send to named tabs
 p = ":pipe-to zqantara --tab --name ipython"
-r = ":pipe-to zqantara --tab --name radian"
+r = ":pipe-to zqantara --final-return false --tab --name radian"
 c = ":pipe-to zqantara --tab --name aichat"
-C = ":pipe-to zqantara --tab --name claude"
+C = ":pipe-to zqantara --final-return 0.1 --tab --name claude"
 t = ":pipe-to zqantara --tab --name shell"
 
 # Send to floating windows by position
