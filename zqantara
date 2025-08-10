@@ -8,6 +8,7 @@ USE_PANE=false
 NAME=""
 PROGRAM=""
 POS=""
+FINAL_RETURN=true
 
 show_help() {
     cat <<'EOF'
@@ -65,6 +66,15 @@ Options:
                                 - 'current': use current floating window without switching focus
                                 - 'up'/'down': switch focus up/down, supports repetition like 'down down'
     --program <command>         Program to launch (e.g., 'ipython --simple-prompt').
+    --final-return <val>        Control the final return behavior after sending bracketed paste:
+                                - true (default): send final return immediately
+                                - false: don't send final return
+                                - number: send final return after delay (in seconds, e.g., 0.1)
+                                NOTE: You generally do not need to think about this option.
+                                Only change this value if you encounter issues:
+                                - Code cannot be executed by REPL (requires manual return): try 0.1
+                                - REPL shows two prompts instead of one: try false
+                                Examples: Claude Code (use 0.1), radian (use false)
     --help                      Show this help message and exit.
 
 Note: --tab, --floating, and --pane are mutually exclusive.
@@ -95,6 +105,10 @@ while [[ $# -gt 0 ]]; do
         ;;
     --pos)
         POS="$2"
+        shift 2
+        ;;
+    --final-return)
+        FINAL_RETURN="$2"
         shift 2
         ;;
     --help)
@@ -223,6 +237,15 @@ validate_args() {
         echo "Error: --pos can only be used with --pane or --floating" >&2
         exit 1
     fi
+
+    # Validate --final-return value
+    if [[ "$FINAL_RETURN" != "true" && "$FINAL_RETURN" != "false" ]]; then
+        # Check if it's a valid positive number (integer or decimal)
+        if ! [[ "$FINAL_RETURN" =~ ^[0-9]*\.?[0-9]+$ ]]; then
+            echo "Error: --final-return must be 'true', 'false', or a positive number" >&2
+            exit 1
+        fi
+    fi
 }
 
 send_bracketed_paste() {
@@ -230,7 +253,20 @@ send_bracketed_paste() {
 
     zellij action write 27 91 50 48 48 126
     zellij action write-chars "$content"
-    zellij action write 13 27 91 50 48 49 126 13
+    zellij action write 13 27 91 50 48 49 126
+
+    # Handle final return based on FINAL_RETURN
+    if [[ "$FINAL_RETURN" == "false" ]]; then
+        # Don't send final return
+        :
+    elif [[ "$FINAL_RETURN" == "true" ]]; then
+        # Send final return immediately
+        zellij action write 13
+    else
+        # Send final return with delay
+        sleep "$FINAL_RETURN"
+        zellij action write 13
+    fi
 }
 
 handle_tab_mode() {
