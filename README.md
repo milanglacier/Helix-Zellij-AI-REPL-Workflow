@@ -207,6 +207,24 @@ t = ":pipe-to zqantara --tab --name shell"
 # Send to panes by position
 "l" = ":pipe-to zqantara --pane --pos 'down right'"
 "h" = ":pipe-to zqantara --pane --pos 'down left'"
+
+[keys.select.space.space]
+# Send to named tabs
+p = ":pipe-to zqantara --tab --name ipython"
+r = ":pipe-to zqantara --final-return false --tab --name radian"
+c = ":pipe-to zqantara --tab --name aichat"
+C = ":pipe-to zqantara --final-return 0.1 --tab --name claude"
+t = ":pipe-to zqantara --tab --name shell"
+
+# Send to floating windows by position
+# 'current' means use current floating window without switching position
+"1" = ":pipe-to zqantara --floating --pos current"
+"2" = ":pipe-to zqantara --floating --pos up"
+"3" = ":pipe-to zqantara --floating --pos down"
+
+# Send to panes by position
+"l" = ":pipe-to zqantara --pane --pos 'down right'"
+"h" = ":pipe-to zqantara --pane --pos 'down left'"
 ```
 
 ### Current Limitations
