@@ -227,6 +227,21 @@ t = ":pipe-to zqantara --tab --name shell"
 "h" = ":pipe-to zqantara --pane --pos 'down left'"
 ```
 
+### Recommended Zellij Configuration
+
+If you're using a terminal emulator that supports the Kitty keyboard protocol
+(such as Kitty or Ghostty), I recommend add the following line to your
+`config.kdl`:
+
+```kdl
+support_kitty_keyboard_protocol false
+```
+
+Without this configuration, certain Helix keybindings that require `Alt+Shift`
+combinations will not work properly. This includes keys like `Alt+C` (typed as
+`Alt+Shift+c`) and `Alt+*` (typed as `Alt+Shift+8`). For technical details
+about this issue, see Zellij Issue #4148.
+
 ### Current Limitations
 
 Due to Zellij's API limitations, the script cannot retrieve pane names or floating window names:
