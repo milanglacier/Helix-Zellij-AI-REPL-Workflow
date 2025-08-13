@@ -64,7 +64,7 @@ Helix editor, offering intelligent code suggestions using various AI providers.
 
 ### Features
 
-- Multi-provider support: Works with OpenAI, Gemini, Codestral, and Claude APIs
+- Multi-provider support: Works with OpenAI, Gemini, Codestral, FIM, and Claude APIs
 - Recommended model: `gemini-2.0-flash` or `codestral` for optimal performance and speed
 - Minimal dependencies: Only requires `jq` and standard Unix tools
 - Context-aware: Understands cursor position, file context, and programming language
@@ -132,6 +132,7 @@ A-y = [
             --stop '["\\n"]'
     """,
     "align_view_center"
+]
 ```
 
 **Note**: Claude models do not support newline/whitespace as stop sequences, so
