@@ -2,7 +2,7 @@
 
 This repository provides a complete workflow integration for modern development
 using Helix editor, Zellij terminal multiplexer, AI CLI apps, and REPL
-environments. The workflow is built around two scripts with minimal
+environments. The workflow is built around three scripts with minimal
 dependencies:
 
 ## Overview
@@ -11,6 +11,7 @@ dependencies:
   Gemini, Codestral and Claude providers
 - **`zqantara`** - REPL bridge between Helix and Zellij with bracketed paste
   mode support for all Zellij window types
+- **`symbol-search`** - Workspace-wide symbol completion using command line tools
 
 This workflow enables seamless integration between:
 
@@ -19,19 +20,21 @@ This workflow enables seamless integration between:
 - AI CLI applications like Aider and Claude Code
 - Multiplexing: Manage multiple REPLs and processes efficiently using Zellij's tabs, panes, and floating windows.
 
-Both scripts are designed with minimal dependencies and focus on providing
+All scripts are designed with minimal dependencies and focus on providing
 efficient, keyboard-driven workflows.
 
-> **💡 Tip**: Use `haico --help` and `zqantara --help` to view the complete
+> **💡 Tip**: Use `haico --help`, `zqantara --help`, and `symbol-search --help` to view the complete
 > documentation of all supported command-line arguments and options.
 
 ## Installation
 
 1. Clone this repository
-2. Copy `haico` and `zqantara` script to your PATH
-3. Set up the required API keys for `haico`
-4. Configure Helix with the provided key bindings
-5. Ensure Zellij is installed and running
+2. Copy `haico`, `zqantara`, and `symbol-search` scripts to your PATH
+3. For `symbol-search` to function without `fzf`, copy the `picker` script to
+   your `PATH` as well.
+4. Set up the required API keys for `haico`
+5. Configure Helix with the provided key bindings
+6. Ensure Zellij is installed and running
 
 ## Video Showcase
 
@@ -264,6 +267,62 @@ applications support this feature, which offers several advantages:
 - Maintains proper indentation and formatting
 
 </details>
+
+## symbol-search - Workspace Symbol Completion
+
+`symbol-search` provides workspace-wide symbol completion for Helix editor
+through command line tools integration. While it can work with only standard
+Unix tools, it's designed to leverage advanced command line utilities like
+universal-ctags, ripgrep, and fzf for better user experience. It supports
+multiple search backends: universal-ctags for tag-based symbol indexing,
+`ripgrep` for fast text searching, and `grep` as a fallback. The script
+gracefully falls back to standard Unix tools using the included `picker` script
+when external dependencies are unavailable.
+
+### Features
+
+- **Adaptive toolchain**: Leverages ripgrep, fzf, and universal-ctags when
+  available; falls back to grep and the dependency-free `picker` script
+- **Workspace-wide completion**: Symbol search across the entire project, not
+  limited to the current file
+- **Zero external dependencies**: Complete functionality using only standard
+  Unix tools when needed
+
+### Comparison with simple-language-server
+
+| Feature          | symbol-search                               | simple-language-server                               |
+| ---------------- | ------------------------------------------- | ---------------------------------------------------- |
+| **Dependencies** | Standard Unix tools or common CLI utilities | Requires Rust toolchain for compilation              |
+| **Installation** | Ready-to-use shell script                   | Binary compilation required (Nix packages available) |
+| **Scope**        | Workspace-wide symbol completion            | Files opened in editor session                       |
+| **Integration**  | External picker via `:pipe` command         | Native LSP auto-completion                           |
+| **Features**     | Symbol completion only                      | Symbol + snippet completion, more LSP features       |
+| **Portability**  | Works anywhere with basic Unix tools        | Requires pre-built binary or compilation             |
+
+### Helix Integration
+
+Configure symbol completion with these polished key bindings:
+
+```toml
+[keys.insert.C-x]
+# Macro ensures proper word selection before symbol search
+"C-x" = "@<esc>hmiw<C-x>a"
+
+[keys.normal]
+"C-x" = [
+    ":pipe symbol-search --rg --tags .tags",
+]
+
+[keys.select]
+"C-x" = [
+    ":pipe symbol-search --rg --tags .tags",
+]
+```
+
+The insert mode configuration uses a macro (`@<esc>hmiw<C-x>a`) to ensure
+complete word selection under the cursor before triggering symbol search. This
+approach provides more reliable completion context than command sequences,
+which cannot accurately select word boundaries (`miw` operation).
 
 ## Complete Workflow
 

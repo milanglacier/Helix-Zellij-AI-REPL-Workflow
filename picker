@@ -1,0 +1,138 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+mkdir -p ~/.cache/picker
+
+# Function to check if stdin/stdout is a TTY and open /dev/tty if needed
+setup_tty() {
+    # Check if stdin is a TTY
+    if [[ -t 0 ]]; then
+        # stdin is a TTY, use it directly
+        INPUT_FD=0
+    else
+        # stdin is redirected (e.g., from Helix), open /dev/tty for input
+        exec 3</dev/tty
+        INPUT_FD=3
+    fi
+
+    # For output, always use /dev/tty if stdin is not a TTY (following yazi's approach)
+    # This ensures we can display the UI even when stdout is captured by the parent TUI
+    if [[ -t 0 ]]; then
+        # Normal execution, use stdout
+        OUTPUT_FD=1
+    else
+        # Running inside a TUI app, use /dev/tty for output
+        exec 4>/dev/tty
+        OUTPUT_FD=4
+    fi
+}
+
+# Read all input into an array
+read_input() {
+    local -a lines=()
+    local line
+
+    while IFS= read -r line; do
+        lines+=("$line")
+    done
+
+    # Export the array for use in other functions
+    printf '%s\n' "${lines[@]}" >~/.cache/picker/data_$$
+}
+
+# Save and restore terminal settings
+save_terminal_state() {
+    if [[ "$INPUT_FD" != "0" ]] || [[ "$OUTPUT_FD" != "1" ]]; then
+        # We're using /dev/tty, need to manage its state
+        SAVED_STTY=$(stty -g </dev/tty 2>/dev/null) || SAVED_STTY=""
+    fi
+}
+
+restore_terminal_state() {
+    if [[ -n "${SAVED_STTY:-}" ]]; then
+        stty "$SAVED_STTY" </dev/tty 2>/dev/null || true
+    fi
+}
+
+# Display numbered lines and prompt for selection
+display_and_select() {
+    local -a lines=()
+
+    # Read lines from temp file
+    while IFS= read -r line; do
+        lines+=("$line")
+    done <~/.cache/picker/data_$$
+
+    # Save terminal state before modifying it
+    save_terminal_state
+
+    # Set up terminal for interactive use when using /dev/tty
+    if [[ "$INPUT_FD" != "0" ]]; then
+        # Put terminal in raw mode for proper input handling
+        stty raw -echo </dev/tty 2>/dev/null || true
+    fi
+
+    # Clear screen and display numbered lines
+    printf '\033[2J\033[H' >&"$OUTPUT_FD"
+
+    for i in "${!lines[@]}"; do
+        printf '%3d: %s\r\n' $((i + 1)) "${lines[i]}" >&"$OUTPUT_FD"
+    done
+
+    printf '\r\nSelect a line number (1-%d): ' "${#lines[@]}" >&"$OUTPUT_FD"
+
+    # Read selection from appropriate input
+    local selection=""
+    local char
+
+    # Read input character by character until enter is pressed
+    while IFS= read -r -n1 char <&"$INPUT_FD"; do
+        if [[ "$char" == $'\r' ]] || [[ "$char" == $'\n' ]] || [[ "$char" == "" ]]; then
+            printf '\r\n' >&"$OUTPUT_FD"
+            break
+        elif [[ "$char" =~ [0-9] ]]; then
+            selection+="$char"
+            printf '%s' "$char" >&"$OUTPUT_FD"
+        elif [[ "$char" == $'\177' ]] || [[ "$char" == $'\b' ]]; then
+            # Backspace
+            if [[ -n "$selection" ]]; then
+                selection="${selection%?}"
+                printf '\b \b' >&"$OUTPUT_FD"
+            fi
+        fi
+    done
+
+    # Restore terminal state
+    restore_terminal_state
+
+    # Validate selection
+    if [[ "$selection" =~ ^[0-9]+$ ]] && ((selection >= 1 && selection <= ${#lines[@]})); then
+        # Print selected line to stdout (original stdout, not TTY)
+        printf '%s\n' "${lines[$((selection - 1))]}"
+    else
+        printf 'Invalid selection\n' >&2
+        exit 1
+    fi
+}
+
+# Cleanup function
+cleanup() {
+    restore_terminal_state
+    rm -f ~/.cache/picker/data_$$
+    # Close file descriptors if they were opened
+    [[ "${INPUT_FD:-}" != "0" ]] && exec 3<&- 2>/dev/null || true
+    [[ "${OUTPUT_FD:-}" != "1" ]] && exec 4>&- 2>/dev/null || true
+}
+
+# Set up signal handlers for cleanup
+trap cleanup EXIT INT TERM
+
+# Main execution
+main() {
+    setup_tty
+    read_input
+    display_and_select
+}
+
+main "$@"

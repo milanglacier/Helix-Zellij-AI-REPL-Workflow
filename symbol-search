@@ -1,0 +1,237 @@
+#!/usr/bin/env bash
+
+# Symbol search script that uses readtags, ripgrep, or grep to find symbols and pipe to fzf
+
+set -euo pipefail
+
+# Default values
+USE_RG=false
+USE_GREP=false
+TAGS_FILES=()
+FORCE_PICKER=false
+
+# Function to show help
+show_help() {
+    cat <<'EOF'
+SYMBOL-SEARCH - Symbol search tool using readtags, ripgrep, or grep with fzf
+
+SYNOPSIS
+    echo "symbol_prefix" | symbol-search [OPTIONS]
+
+DESCRIPTION
+    This script searches for symbols starting with a given prefix using various
+    search methods (readtags, ripgrep, or grep) and presents the results via fzf.
+    The symbol prefix is read from stdin.
+
+OPTIONS
+    --rg
+        Use ripgrep to search for symbols in the current directory and subdirectories.
+        Searches case-insensitively and respects gitignore files. Only extracts
+        matching symbol names, not entire lines.
+
+    --grep
+        Use grep to search for symbols in the current directory and subdirectories.
+        Searches case-insensitively and only extracts matching symbol names.
+
+    --tags TAGS_FILE
+        Use readtags to search in the specified tags file. This option can be
+        specified multiple times to search in multiple tags files.
+
+    --no-fzf
+        Force use of the picker script instead of fzf for selection.
+        This is useful in environments where fzf is not available.
+
+    --help
+        Show this help message and exit.
+
+    Multiple search methods can be combined. At least one search method must be
+    specified.
+
+BEHAVIOR
+    - All searches are case-insensitive
+    - Results are deduplicated before being passed to fzf
+    - Respects gitignore and ignores common directories (.git, .venv, node_modules, etc.)
+    - Preserves hidden files like .editorconfig, .stylua.toml
+    - Only symbol names are extracted, not full lines (for ripgrep and grep)
+
+EXAMPLES
+    # Search using ripgrep only
+    echo "func" | symbol-search --rg
+
+    # Search using multiple tags files
+    echo "MyClass" | symbol-search --tags .tags --tags tags
+
+    # Combine all search methods
+    echo "var" | symbol-search --rg --grep --tags .tags
+
+DEPENDENCIES
+    - fzf (for interactive selection, falls back to picker script if not available)
+    - picker script (fallback for fzf, should be in PATH)
+    - ripgrep (if using --rg)
+    - readtags (if using --tags, part of universal-ctags)
+    - Standard POSIX tools (grep, find, awk, sort)
+
+EXIT CODES
+    0    Success
+    1    Error (no matches found, invalid arguments, missing dependencies)
+EOF
+}
+
+# Parse command line arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+    --help)
+        show_help
+        exit 0
+        ;;
+    --rg)
+        USE_RG=true
+        shift
+        ;;
+    --grep)
+        USE_GREP=true
+        shift
+        ;;
+    --tags)
+        if [[ -n "${2:-}" ]]; then
+            TAGS_FILES+=("$2")
+            shift 2
+        else
+            echo "Error: --tags requires a file argument" >&2
+            exit 1
+        fi
+        ;;
+    --no-fzf)
+        FORCE_PICKER=true
+        shift
+        ;;
+    *)
+        echo "Unknown option: $1" >&2
+        echo "Usage: $0 [--rg] [--grep] [--tags TAGS_FILE]... [--no-fzf]" >&2
+        echo "Try '$0 --help' for more information." >&2
+        exit 1
+        ;;
+    esac
+done
+
+# Check if at least one search method is specified
+if [[ "$USE_RG" == false && "$USE_GREP" == false && ${#TAGS_FILES[@]} -eq 0 ]]; then
+    echo "Error: At least one search method must be specified (--rg, --grep, or --tags)" >&2
+    exit 1
+fi
+
+# Read symbol prefix from stdin
+symbol_prefix=$(cat)
+
+if [[ -z "$symbol_prefix" ]]; then
+    echo "Error: No symbol prefix provided" >&2
+    exit 1
+fi
+
+# Variable to collect all results
+all_results=""
+
+# Function to search with readtags
+search_readtags() {
+    local tags_file="$1"
+    if [[ -f "$tags_file" ]]; then
+        local readtags_results
+        if readtags_results=$(readtags -ip -t "$tags_file" - "$symbol_prefix" 2>/dev/null); then
+            readtags_results=$(echo "$readtags_results" | awk -F"\t" '{print $1}')
+            if [[ -n "$readtags_results" ]]; then
+                all_results="${all_results}${readtags_results}"$'\n'
+            fi
+        fi
+    fi
+}
+
+# Function to search with ripgrep
+search_ripgrep() {
+    # Search for symbols case-insensitively, respecting gitignore, ignoring common dirs
+    local rg_results
+    if rg_results=$(rg -i --hidden \
+        --glob='!.git/**' --glob='!.venv/**' --glob='!node_modules/**' \
+        --glob='!__pycache__/**' --glob='!.pytest_cache/**' \
+        --glob='!build/**' --glob='!dist/**' --glob='!target/**' \
+        --only-matching --no-heading --no-line-number --no-filename \
+        "\b${symbol_prefix}\w*" . 2>/dev/null); then
+        if [[ -n "$rg_results" ]]; then
+            all_results="${all_results}${rg_results}"$'\n'
+        fi
+    fi
+}
+
+# Function to search with grep
+search_grep() {
+    # Use find to get files, respecting common ignore patterns, then grep
+    local find_results
+    local grep_results
+
+    if find_results=$(find . -type f \
+        -not -path './.git/*' \
+        -not -path './.venv/*' \
+        -not -path './node_modules/*' \
+        -not -path './__pycache__/*' \
+        -not -path './.pytest_cache/*' \
+        -not -path './build/*' \
+        -not -path './dist/*' \
+        -not -path './target/*' \
+        -not -name '*.pyc' \
+        -not -name '*.o' \
+        -not -name '*.so' \
+        -not -name '*.dylib' \
+        -not -name '*.dll' \
+        2>/dev/null); then
+        if [[ -n "$find_results" ]]; then
+            if grep_results=$(echo "$find_results" | xargs grep -aiIoh "\b${symbol_prefix}\w*" 2>/dev/null); then
+                if [[ -n "$grep_results" ]]; then
+                    all_results="${all_results}${grep_results}"$'\n'
+                fi
+            fi
+        fi
+    fi
+}
+
+# Perform searches based on options
+if [[ ${#TAGS_FILES[@]} -gt 0 ]]; then
+    for tags_file in "${TAGS_FILES[@]}"; do
+        search_readtags "$tags_file"
+    done
+fi
+
+if [[ "$USE_RG" == true ]]; then
+    search_ripgrep
+fi
+
+if [[ "$USE_GREP" == true ]]; then
+    search_grep
+fi
+
+# Function to determine which picker to use
+use_picker() {
+    local deduplicated_results
+    deduplicated_results=$(echo "$all_results" | sed '/^\s*$/d' | sort | uniq)
+    
+    if [[ "$FORCE_PICKER" == true ]]; then
+        # Force use of picker script
+        echo "$deduplicated_results" | picker
+    elif command -v fzf >/dev/null 2>&1; then
+        # Use fzf if available
+        echo "$deduplicated_results" | fzf
+    elif command -v picker >/dev/null 2>&1; then
+        # Fallback to picker script
+        echo "$deduplicated_results" | picker
+    else
+        echo "Error: Neither fzf nor picker script is available" >&2
+        echo "Please install fzf or ensure the picker script is in your PATH" >&2
+        exit 1
+    fi
+}
+
+# Deduplicate results and use appropriate picker
+if [[ -n "$all_results" ]]; then
+    use_picker
+else
+    echo "No matches found for: $symbol_prefix" >&2
+    exit 1
+fi
