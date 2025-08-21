@@ -211,7 +211,7 @@ fi
 use_picker() {
     local deduplicated_results
     deduplicated_results=$(echo "$all_results" | sed '/^\s*$/d' | sort | uniq)
-    
+
     if [[ "$FORCE_PICKER" == true ]]; then
         # Force use of picker script
         echo "$deduplicated_results" | picker
