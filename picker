@@ -128,8 +128,48 @@ cleanup() {
 # Set up signal handlers for cleanup
 trap cleanup EXIT INT TERM
 
+# Show help message
+show_help() {
+    cat <<'EOF'
+picker - A minimal TUI picker for selecting from piped input
+
+USAGE:
+    picker [--help]
+
+DESCRIPTION:
+    Reads lines from stdin and presents them as a numbered list for interactive
+    selection. The selected line is printed to stdout.
+
+    Full TUI compatibility: works perfectly inside editors like Helix and other
+    terminal applications that redirect stdin/stdout.
+
+EXAMPLES:
+    # Basic usage
+    ls | picker
+
+    # Use with other commands
+    git branch | picker | xargs git checkout
+
+    # Use as fallback in scripts
+    command | fzf || command | picker
+
+OPTIONS:
+    --help    Show this help message and exit
+
+EXIT STATUS:
+    0    A line was successfully selected
+    1    Invalid selection or error occurred
+EOF
+}
+
 # Main execution
 main() {
+    # Check for help flag
+    if [[ "${1:-}" == "--help" ]] || [[ "${1:-}" == "-h" ]]; then
+        show_help
+        exit 0
+    fi
+
     setup_tty
     read_input
     display_and_select
