@@ -11,7 +11,7 @@ dependencies:
   Gemini, Codestral and Claude providers
 - **`zqantara`** - REPL bridge between Helix and Zellij with bracketed paste
   mode support for all Zellij window types
-- **`symbol-search`** - Workspace-wide symbol completion using command line tools
+- **`symbol-search`** - Workspace-wide symbol (word) completion using command line tools
 
 This workflow enables seamless integration between:
 
@@ -29,12 +29,10 @@ efficient, keyboard-driven workflows.
 ## Installation
 
 1. Clone this repository
-2. Copy `haico`, `zqantara`, and `symbol-search` scripts to your PATH
-3. For `symbol-search` to function without `fzf`, copy the `picker` script to
-   your `PATH` as well.
-4. Set up the required API keys for `haico`
-5. Configure Helix with the provided key bindings
-6. Ensure Zellij is installed and running
+2. Copy the scripts from the `bin/` folder (`haico`, `zqantara`, `symbol-search`, and `picker`) to your PATH
+3. Set up the required API keys for `haico`
+4. Configure Helix with the provided key bindings
+5. Ensure Zellij is installed and running
 
 ## Video Showcase
 
@@ -268,16 +266,18 @@ applications support this feature, which offers several advantages:
 
 </details>
 
-## symbol-search - Workspace Symbol Completion
+## symbol-search - Workspace Symbol (Word) Completion
 
-`symbol-search` provides workspace-wide symbol completion for Helix editor
+`symbol-search` provides workspace-wide symbol (word) completion for Helix editor
 through command line tools integration. While it can work with only standard
 Unix tools, it's designed to leverage advanced command line utilities like
-universal-ctags, ripgrep, and fzf for better user experience. It supports
-multiple search backends: universal-ctags for tag-based symbol indexing,
-`ripgrep` for fast text searching, and `grep` as a fallback. The script
-gracefully falls back to standard Unix tools using the included `picker` script
-when external dependencies are unavailable.
+`universal-ctags`, `ripgrep`, and `fzf` for better user experience.
+
+It supports multiple search backends: `universal-ctags` for tag-based symbol
+indexing, `ripgrep` for fast text searching, and `grep` as a fallback.
+
+The script gracefully falls back to standard Unix tools using the included
+`picker` script when `fzf` are unavailable.
 
 ### Features
 
@@ -290,14 +290,14 @@ when external dependencies are unavailable.
 
 ### Comparison with simple-language-server
 
-| Feature          | symbol-search                               | simple-language-server                               |
-| ---------------- | ------------------------------------------- | ---------------------------------------------------- |
-| **Dependencies** | Standard Unix tools or common CLI utilities | Requires Rust toolchain for compilation              |
-| **Installation** | Ready-to-use shell script                   | Binary compilation required (Nix packages available) |
-| **Scope**        | Workspace-wide symbol completion            | Files opened in editor session                       |
-| **Integration**  | External picker via `:pipe` command         | Native LSP auto-completion                           |
-| **Features**     | Symbol completion only                      | Symbol + snippet completion, more LSP features       |
-| **Portability**  | Works anywhere with basic Unix tools        | Requires pre-built binary or compilation             |
+| Feature          | symbol-search                                    | simple-language-server                               |
+| ---------------- | ------------------------------------------------ | ---------------------------------------------------- |
+| **Dependencies** | Standard Unix tools or established CLI utilities | Requires Rust toolchain for compilation              |
+| **Installation** | Ready-to-use shell script                        | Binary compilation required (Nix packages available) |
+| **Scope**        | Workspace-wide symbol completion                 | Files opened in editor session                       |
+| **Integration**  | External picker via `:pipe` command              | Native LSP auto-completion                           |
+| **Features**     | Symbol completion only                           | Symbol + snippet completion, more LSP features       |
+| **Portability**  | Works anywhere with basic Unix tools             | Requires pre-built binary or compilation             |
 
 ### Helix Integration
 
@@ -310,12 +310,14 @@ Configure symbol completion with these polished key bindings:
 
 [keys.normal]
 "C-x" = [
-    ":pipe symbol-search --rg --tags .tags",
+    ":pipe symbol-search --rg",
+    # Use grep if ripgrep is unavailable
+    # ":pipe symbol-search --grep",
 ]
 
 [keys.select]
 "C-x" = [
-    ":pipe symbol-search --rg --tags .tags",
+    ":pipe symbol-search --rg",
 ]
 ```
 
