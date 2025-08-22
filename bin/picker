@@ -2,6 +2,40 @@
 
 set -euo pipefail
 
+# Show help message
+show_help() {
+    cat <<'EOF'
+picker - A minimal TUI picker for selecting from piped input
+
+USAGE:
+    picker [--help]
+
+DESCRIPTION:
+    Reads lines from stdin and presents them as a numbered list for interactive
+    selection. The selected line is printed to stdout.
+
+    Full TUI compatibility: works perfectly inside editors like Helix and other
+    terminal applications that redirect stdin/stdout.
+
+EXAMPLES:
+    # Basic usage
+    ls | picker
+
+    # Use with other commands
+    git branch | picker | xargs git checkout
+
+    # Use as fallback in scripts
+    command | fzf || command | picker
+
+OPTIONS:
+    --help    Show this help message and exit
+
+EXIT STATUS:
+    0    A line was successfully selected
+    1    Invalid selection or error occurred
+EOF
+}
+
 mkdir -p ~/.cache/picker
 
 # Function to check if stdin/stdout is a TTY and open /dev/tty if needed
@@ -127,40 +161,6 @@ cleanup() {
 
 # Set up signal handlers for cleanup
 trap cleanup EXIT INT TERM
-
-# Show help message
-show_help() {
-    cat <<'EOF'
-picker - A minimal TUI picker for selecting from piped input
-
-USAGE:
-    picker [--help]
-
-DESCRIPTION:
-    Reads lines from stdin and presents them as a numbered list for interactive
-    selection. The selected line is printed to stdout.
-
-    Full TUI compatibility: works perfectly inside editors like Helix and other
-    terminal applications that redirect stdin/stdout.
-
-EXAMPLES:
-    # Basic usage
-    ls | picker
-
-    # Use with other commands
-    git branch | picker | xargs git checkout
-
-    # Use as fallback in scripts
-    command | fzf || command | picker
-
-OPTIONS:
-    --help    Show this help message and exit
-
-EXIT STATUS:
-    0    A line was successfully selected
-    1    Invalid selection or error occurred
-EOF
-}
 
 # Main execution
 main() {
