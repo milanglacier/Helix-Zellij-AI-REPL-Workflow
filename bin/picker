@@ -16,6 +16,7 @@ DESCRIPTION:
 
     Full TUI compatibility: works perfectly inside editors like Helix and other
     terminal applications that redirect stdin/stdout.
+    Press 'q' at any time to cancel without selecting.
 
 EXAMPLES:
     # Basic usage
@@ -33,10 +34,9 @@ OPTIONS:
 EXIT STATUS:
     0    A line was successfully selected
     1    Invalid selection or error occurred
+    130  Canceled by user (pressed 'q')
 EOF
 }
-
-mkdir -p ~/.cache/picker
 
 # Function to check if stdin/stdout is a TTY and open /dev/tty if needed
 setup_tty() {
@@ -64,15 +64,12 @@ setup_tty() {
 
 # Read all input into an array
 read_input() {
-    local -a lines=()
+    # Read piped stdin into a global array
+    PICKER_ITEMS=()
     local line
-
     while IFS= read -r line; do
-        lines+=("$line")
+        PICKER_ITEMS+=("$line")
     done
-
-    # Export the array for use in other functions
-    printf '%s\n' "${lines[@]}" >~/.cache/picker/data_$$
 }
 
 # Save and restore terminal settings
@@ -91,13 +88,6 @@ restore_terminal_state() {
 
 # Display numbered lines and prompt for selection
 display_and_select() {
-    local -a lines=()
-
-    # Read lines from temp file
-    while IFS= read -r line; do
-        lines+=("$line")
-    done <~/.cache/picker/data_$$
-
     # Save terminal state before modifying it
     save_terminal_state
 
@@ -110,11 +100,11 @@ display_and_select() {
     # Clear screen and display numbered lines
     printf '\033[2J\033[H' >&"$OUTPUT_FD"
 
-    for i in "${!lines[@]}"; do
-        printf '%3d: %s\r\n' $((i + 1)) "${lines[i]}" >&"$OUTPUT_FD"
+    for i in "${!PICKER_ITEMS[@]}"; do
+        printf '%3d: %s\r\n' $((i + 1)) "${PICKER_ITEMS[i]}" >&"$OUTPUT_FD"
     done
 
-    printf '\r\nSelect a line number (1-%d): ' "${#lines[@]}" >&"$OUTPUT_FD"
+    printf '\r\nSelect a line number (1-%d) [q to cancel]: ' "${#PICKER_ITEMS[@]}" >&"$OUTPUT_FD"
 
     # Read selection from appropriate input
     local selection=""
@@ -125,6 +115,10 @@ display_and_select() {
         if [[ "$char" == $'\r' ]] || [[ "$char" == $'\n' ]] || [[ "$char" == "" ]]; then
             printf '\r\n' >&"$OUTPUT_FD"
             break
+        elif [[ "$char" == 'q' ]]; then
+            # User canceled with 'q'
+            printf '\r\n' >&"$OUTPUT_FD"
+            exit 130
         elif [[ "$char" =~ [0-9] ]]; then
             selection+="$char"
             printf '%s' "$char" >&"$OUTPUT_FD"
@@ -141,9 +135,9 @@ display_and_select() {
     restore_terminal_state
 
     # Validate selection
-    if [[ "$selection" =~ ^[0-9]+$ ]] && ((selection >= 1 && selection <= ${#lines[@]})); then
+    if [[ "$selection" =~ ^[0-9]+$ ]] && ((selection >= 1 && selection <= ${#PICKER_ITEMS[@]})); then
         # Print selected line to stdout (original stdout, not TTY)
-        printf '%s\n' "${lines[$((selection - 1))]}"
+        printf '%s\n' "${PICKER_ITEMS[$((selection - 1))]}"
     else
         printf 'Invalid selection\n' >&2
         exit 1
@@ -153,7 +147,6 @@ display_and_select() {
 # Cleanup function
 cleanup() {
     restore_terminal_state
-    rm -f ~/.cache/picker/data_$$
     # Close file descriptors if they were opened
     [[ "${INPUT_FD:-}" != "0" ]] && exec 3<&- 2>/dev/null || true
     [[ "${OUTPUT_FD:-}" != "1" ]] && exec 4>&- 2>/dev/null || true
