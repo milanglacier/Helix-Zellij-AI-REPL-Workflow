@@ -288,9 +288,9 @@ The script gracefully falls back to standard Unix tools using the included
 - **Zero external dependencies**: Complete functionality using only standard
   Unix tools when needed
 
-### Comparison with simple-language-server
+### Comparison with simple-completion-language-server
 
-| Feature          | symbol-search                                    | simple-language-server                               |
+| Feature          | symbol-search                                    | simple-completion-language-server                    |
 | ---------------- | ------------------------------------------------ | ---------------------------------------------------- |
 | **Dependencies** | Standard Unix tools or established CLI utilities | Requires Rust toolchain for compilation              |
 | **Installation** | Ready-to-use shell script                        | Binary compilation required (Nix packages available) |
@@ -315,10 +315,18 @@ Configure symbol completion with these polished key bindings:
     # ":pipe symbol-search --grep",
 ]
 
+# If `fzf` is unavailable and the fallback picker script is used, add `:redraw`
+# to ensure the screen is properly refreshed after the command executes.
+# "C-x" = [":pipe symbol-search --rg", ":redraw"]
+
 [keys.select]
 "C-x" = [
     ":pipe symbol-search --rg",
 ]
+
+# If `fzf` is unavailable and the fallback picker script is used, add `:redraw`
+# to ensure the screen is properly refreshed after the command executes.
+# "C-x" = [":pipe symbol-search --rg", ":redraw"]
 ```
 
 The insert mode configuration uses a macro (`@<esc>hmiw<C-x>a`) to ensure
