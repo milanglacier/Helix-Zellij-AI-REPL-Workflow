@@ -8,7 +8,7 @@ set -euo pipefail
 USE_RG=false
 USE_GREP=false
 TAGS_FILES=()
-FORCE_PICKER=false
+PICKER_CMD="auto"
 
 # Function to show help
 show_help() {
@@ -37,9 +37,10 @@ OPTIONS
         Use readtags to search in the specified tags file. This option can be
         specified multiple times to search in multiple tags files.
 
-    --no-fzf
-        Force use of the picker script instead of fzf for selection.
-        This is useful in environments where fzf is not available.
+    --picker [COMMAND]
+        Specify the picker command to use for selection. If no command is provided,
+        defaults to 'fzf' if available, otherwise falls back to 'picker'.
+        You can specify any command that accepts input from stdin.
 
     --help
         Show this help message and exit.
@@ -101,13 +102,17 @@ while [[ $# -gt 0 ]]; do
             exit 1
         fi
         ;;
-    --no-fzf)
-        FORCE_PICKER=true
-        shift
+    --picker)
+        if [[ -n "${2:-}" ]]; then
+            PICKER_CMD="$2"
+            shift 2
+        else
+            shift 1
+        fi
         ;;
     *)
         echo "Unknown option: $1" >&2
-        echo "Usage: $0 [--rg] [--grep] [--tags TAGS_FILE]... [--no-fzf]" >&2
+        echo "Usage: $0 [--rg] [--grep] [--tags TAGS_FILE]... [--picker [COMMAND]]" >&2
         echo "Try '$0 --help' for more information." >&2
         exit 1
         ;;
@@ -207,23 +212,28 @@ if [[ "$USE_GREP" == true ]]; then
     search_grep
 fi
 
-# Function to determine which picker to use
+# Resolve picker command if set to auto
+if [[ "$PICKER_CMD" == "auto" ]]; then
+    if command -v fzf >/dev/null 2>&1; then
+        PICKER_CMD="fzf"
+    elif command -v picker >/dev/null 2>&1; then
+        PICKER_CMD="picker"
+    else
+        echo "Error: Neither fzf nor picker script is available" >&2
+        echo "Please install fzf or ensure the picker script is in your PATH" >&2
+        exit 1
+    fi
+fi
+
+# Function to use the selected picker
 use_picker() {
     local deduplicated_results
     deduplicated_results=$(echo "$all_results" | sed '/^\s*$/d' | sort | uniq)
 
-    if [[ "$FORCE_PICKER" == true ]]; then
-        # Force use of picker script
-        echo "$deduplicated_results" | picker
-    elif command -v fzf >/dev/null 2>&1; then
-        # Use fzf if available
-        echo "$deduplicated_results" | fzf
-    elif command -v picker >/dev/null 2>&1; then
-        # Fallback to picker script
-        echo "$deduplicated_results" | picker
+    if command -v "$PICKER_CMD" >/dev/null 2>&1; then
+        echo "$deduplicated_results" | "$PICKER_CMD"
     else
-        echo "Error: Neither fzf nor picker script is available" >&2
-        echo "Please install fzf or ensure the picker script is in your PATH" >&2
+        echo "Error: Specified picker command '$PICKER_CMD' is not available" >&2
         exit 1
     fi
 }
